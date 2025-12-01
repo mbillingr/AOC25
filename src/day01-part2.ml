@@ -11,11 +11,12 @@ let steps = iter.map(
     chs() |> option.unwrap, 
     str.join("", chs) |> int.from_str |> option.unwrap)), 
   steps);
-let steps = iter.map((fun (d, n) -> if d == "L" then 0 - n else n), steps);
+let singlesteps = iter.flatten iter.map((fun (d, n) -> iter.repeat(d,n)), steps);
+let singlesteps = iter.map((fun d -> if d == "L" then -1 else 1), singlesteps);
 
-let dials = iter.scan((fun(a,b)->(100+a+b)%100), 50, steps);
+let dials = iter.scan((fun(a,b)->(100+a+b)%100), 50, singlesteps);
 
 let n_zeros =  iter.count iter.filter((fun n -> n == 0), dials);
 
-io.write_line ("Day 1, Part 1: " ^ int.to_str n_zeros);
+io.write_line ("Day 1, Part 2: " ^ int.to_str n_zeros);
 
