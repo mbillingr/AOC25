@@ -20,6 +20,7 @@ let ranges = parsing.parse(input,
 
 
 let all_ids = iter.flatten(iter.map(iter.range, vec.iter ranges));
+let all_ids = vec.iter_pbar vec.collect all_ids;
 
 
 let is_invalid = fun id -> begin
