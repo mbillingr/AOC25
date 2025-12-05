@@ -14,7 +14,15 @@ let parse_range = parsing.map_result(
 let ranges = iter.map((fun line -> parsing.parse(line, parse_range)), io.lines);
 let ranges = iter.map(option.unwrap[a=(int*int)], iter.take_while(option.is_positive, ranges));
 
-let range_edges = iter.fold((fun (xs, (a, b)) -> vec.push_back(vec.push_back(xs, `From a), `To b)), #[], ranges);
+//let ranges = vec.iter #[(3,5), (10,14), (16,20), (12,18)];
+
+let range_edges = iter.fold(
+  (fun (xs, (a, b)) -> 
+    vec.push_back(
+      vec.push_back(
+        xs, `From a), `To (b + 1))), 
+  #[], 
+  ranges);
 
 let edge_pos = fun e -> match e with
     | `From a -> a
@@ -25,29 +33,7 @@ let cmp_edges = fun (e1, e2) -> begin
 end;
 
 let sorted_edges = vec.sort_by(cmp_edges, range_edges);
-(*
-print(sorted_edges);
 
-let overlapping = iter.scan(
-  (fun ({x; overlap}, e) ->
-    match e with
-      | `From x -> {x=e; overlap=(overlap + 1)}
-      | `To x -> {x=e; overlap=(overlap - 1)}),
-  {x=0; overlap=0},
-  vec.iter sorted_edges
-);
-
-let relevant_edges = iter.filter(
-  (fun {x; overlap} -> overlap < 2),
-  overlapping
-);
-
-print(relevant_edges {});
-print(relevant_edges {});
-print(relevant_edges {});
-print(relevant_edges {});
-print(relevant_edges {});
-*)
 let result =
   let vars = {mut start=0; mut overlap=0; mut total=0} in
   let es = vec.iter sorted_edges in
@@ -59,11 +45,12 @@ let result =
                 then `Continue (vars.start <- x)
                 else `Continue {})
             | `To x -> (if (vars.overlap <- vars.overlap - 1) == 1
-                then `Continue (vars.total <- vars.total + (1 + x - vars.start))
+                then `Continue (vars.total <- vars.total + (x - vars.start))
                 else `Continue {}));
 
 io.write_line ("Day 5, Part 2: " ^ int.to_str(result));
 
 if result <= 339668510830666 then panic "Too Low" else {};
+if result <= 339668510830673 then panic "Too Low" else {};
 if result >= 339668510830765 then panic "Too High" else {};
 
