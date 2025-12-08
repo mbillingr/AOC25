@@ -23,9 +23,6 @@ let points =
 
 let pids = vec.collect iter.range(0, vec.length points);
 
-//let points = vec.sort_by((fun ({x=a}, {x=b}) -> a < b), points);
-
-
 let distance = fun (a, b) -> begin
   let a = vec.get(points, a);
   let b = vec.get(points, b);
@@ -35,69 +32,32 @@ let distance = fun (a, b) -> begin
   dx * dx + dy * dy + dz * dz
 end;
 
-
-let myheap = fun _ -> heap.new (fun (pair1, pair2) -> distance pair1 > distance pair2);
-
-let merge = fun (hp, ps, n) -> begin
-  ps |> (iter.for_each(fun x -> heap.push(hp, x)));
-  loop
-    if heap.length hp > n
-    then `Continue (heap.pop hp)
-    else `Break hp
+let pairwise_distances = fun pids -> begin
+  let n = vec.length pids;
+  
+  (pbar.range(0, n) )
+    |> (iter.map(fun i -> (iter.range(0, i) |> (iter.map(fun j -> (i, j))))))
+    |> iter.flatten 
+    |> (iter.map(fun (pi, pj) -> (vec.get(pids, pi), vec.get(pids, pj))))
+    |> (iter.map(fun pair -> {pair; d=distance pair}))
 end;
 
+let connected_pairs = 
+  let hp = heap.new (fun ({d=a}, {d=b}) -> a < b) in begin
+    io.write_line "Computing sorted pairwise distances...";
+    pids 
+      |> pairwise_distances 
+      |> (iter.for_each(fun p -> 
+            heap.push(hp, p)));
 
-let cross_split_closest = fun(l, r, best, n) -> begin
-  let (l_, r_) = match heap.peek best with
-    | `None _ -> (vec.iter l, vec.iter r)
-    | `Some pair -> begin
-      let d = distance pair;
-      let xrmin = (vec.front r).x;
-      let xlmax = (vec.back l).x;
-      (
-        l |> vec.iter_rev |> (iter.take_while(fun p -> xrmin - p.x <= d)), 
-        r |> vec.iter     |> (iter.take_while(fun p -> p.x - xlmax <= d))
-      )
-    end;
-  let r_ = vec.collect r_;
-  let pairs = l_ |> (iter.map(fun pl -> (r_ |> vec.iter |> (iter.map(fun pr -> (pl, pr)))))) |> iter.flatten;
-  merge(best, pairs, n)
-end;
-
-
-let rec closest = fun(ps, n) ->
-  if vec.length ps < 2 then
-    myheap {}
-  else begin
-    let (l, r) = vec.split(ps, vec.length ps / 2);
-    let best_l = closest(l, n);
-    let best_r = closest(r, n);
-    let best = merge(best_l, best_r.data |> vec.iter |> (iter.map(fun x -> x.x)), n);
-    print best.data |> vec.iter |> (iter.map(fun x -> x.x)) |> (iter.map distance) |> vec.collect;
-    cross_split_closest(l, r, best, n)
+    io.write_line "Getting closest pairs...";
+    pbar.range(0, 1000) 
+      |> (iter.map (fun _ -> option.unwrap heap.pop hp)) 
+      |> vec.collect
   end;
 
-//print closest(pids, 1000);
-
-io.write_line "Computing pairwise distances...";
-let n = vec.length points;
-let pairs = 
-  pbar.range(0, n) 
-  |> (iter.map(fun i -> (iter.range(0, i) |> (iter.map(fun j -> (i, j))))))
-  |> iter.flatten 
-  |> (iter.map(fun pair -> {pair; d=distance pair}))
-  |> vec.collect;
-io.write_line "sorting pairs by distance...";
-let pairs = vec.sort_by((fun ({d=a}, {d=b}) -> a < b), pairs);
-let (connected_pairs, _) = vec.split(pairs, 1000);
-
 io.write_line "building graph...";
-let nodes_a = connected_pairs |> vec.iter |> (iter.map(fun {pair=(x, _)} -> x)) |> set.collect;
-let nodes_b = connected_pairs |> vec.iter |> (iter.map(fun {pair=(_, x)} -> x)) |> set.collect;
-let nodes = set.union(nodes_a, nodes_b);
-
-io.write_line "building graph...";
-let edges = connected_pairs |> vec.iter
+let edges = connected_pairs |> vec.iter_pbar
   |> ((iter.fold(
         fun (edges, {pair=(a,b)}) -> begin
           let ea = dict.get_or(edges, a, set.empty);
