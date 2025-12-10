@@ -48,95 +48,104 @@ let machine_parser = parsing.map_result(
 
 let machines = io.lines |> (iter.map(fun line -> option.unwrap parsing.parse(line, machine_parser)));
 
+let zeros = fun(n_rows, n_cols) ->
+  let row = vec.collect iter.repeat(0, n_cols) in
+    vec.collect iter.repeat(row, n_rows);
 
-let apply = fun (xs: vec@int, idx:int) : (vec@int) ->
-    vec.set(xs, idx, vec.get(xs, idx) - 1);
+let init_col = 
+  let mat_set = fun (mat, i, j, x) -> begin
+    let row = vec.get(mat, i);
+    let row = vec.set(row, j, x);
+    vec.set(mat, i, row)
+  end in
+  fun(mat, (j, button)) ->
+    button 
+    |> vec.iter
+    |> ((iter.fold (fun(mat, i) -> mat_set(mat, i, j, 1))) mat);
 
-let push = fun (xs: vec@int) : ((vec@int) -> (vec@int)) ->
-    fun button ->
-      button 
-      |> vec.iter
-      |> ((iter.fold apply) xs);
+let init_matrix = fun {buttons; joltages} ->
+  let mat = zeros(vec.length joltages, vec.length buttons) in
+    buttons 
+    |> vec.iter
+    |> iter.enumerate
+    |> ((iter.fold init_col) mat);
 
+let eq_system = fun {buttons; joltages} -> 
+  iter.zip(
+    joltages |> vec.iter, 
+    {buttons; joltages} |> init_matrix |> vec.iter)
+  |> (iter.map(fun(jolt, row) -> {b=jolt; row}))
+  |> vec.collect;
 
-// Priority queue
-let make_queue = fun x ->
-  begin
-    let queue = heap.new (fun ({d=d1}, {d=d2}) -> d1 < d2);
-    let pop = fun _ -> heap.pop(queue);
-    let push = fun x -> heap.push(queue, x);
-    heap.push(queue, x);
-    {pop; push}
-  end;
+let col_iter = fun(eqs, j) -> eqs |> vec.iter |> (iter.map (fun {row} -> vec.get(row, j)));
 
-let state_id = fun {jolts} -> jolts;
-let is_valid = fun {jolts} -> jolts |> vec.iter |> (iter.all (fun x -> x >= 0));
-let distance_to_target = fun jolts -> jolts |> vec.iter |> int.sum;
-let initial_state = fun {joltages} -> {n=0; d=distance_to_target joltages; jolts=joltages};
-
-let following_states = fun ({n; jolts}, {buttons}) ->
-  buttons
-  |> vec.iter
-  |> (iter.map (push jolts))
-  |> (iter.map (fun jolts -> {n=n+1; jolts; d=distance_to_target jolts}))
-  |> (iter.filter is_valid);
-
-let minimum_presses = fun machine ->
-  let queue = make_queue initial_state machine in
-  let vars = {
-    mut seen = set.empty
-  } in loop begin
-    let state = option.unwrap queue.pop {};
-    print state;
-    if state.d == 0 then
-      `Break state.n
-    else if set.contains(vars.seen, state_id state) then 
-      `Continue {} 
-    else begin
-      vars.seen <- set.insert(vars.seen, state_id state);
-      following_states(state, machine) |> (iter.for_each queue.push);
-      `Continue {}
-    end
-  end;
-
-let is_some = fun x -> match x with | `Some _ -> true | _ -> false;
-let maybe_min = (iter.fold (fun (o, x) -> match o with | `None _ -> `Some x | `Some y -> `Some int.min(x, y))) `None {};
-
-let is_valid = fun jolts -> jolts |> vec.iter |> (iter.all (fun x -> x >= 0));
-let following_states = fun (jolts, buttons) ->
-  buttons
-  |> vec.iter
-  |> (iter.map (push jolts))
-  |> (iter.filter is_valid);
-
-let solve = fun machine -> begin
-  let vars = {mut memo=dict.empty};
-  let rec recursive = fun jolts ->
-    if distance_to_target(jolts) == 0 then
-      `Some 0
-    else
-      match dict.get(vars.memo, jolts) with
-        | `Some x -> x
-        | `None _ ->
-      begin
-        let res = following_states(jolts, machine.buttons)
-          |> (iter.map recursive)
-          |> (iter.filter is_some)
-          |> (iter.map option.unwrap[a=int])
-          |> (iter.map (fun x -> x + 1))
-          |> maybe_min;
-        vars.memo <- dict.insert(vars.memo, jolts, res);
-        print jolts, res;
-        res
-      end;
-
-  recursive machine.joltages
+let eq_b_get = fun(eqs, i) -> (vec.get(eqs, i)).b;
+let eq_b_set = fun(eqs, i, b) -> begin
+  let {row} = vec.get(eqs, i);
+  vec.set(eqs, i, {b;row})
+end;
+let eq_mat_get = fun(eqs, i, j) -> vec.get((vec.get(eqs, i)).row, j);
+let eq_mat_set = fun(eqs, i, j, x) -> begin
+  let {b; row} = vec.get(eqs, i);
+  let row = vec.set(row, j, x);
+  vec.set(eqs, i, {b;row})
 end;
 
-let result = 0; //machines |> vec.collect |> vec.iter_pbar |> (iter.map minimum_presses) |> int.sum;
+let eq_swap_rows = fun(eqs, i1, i2) -> begin
+  let r1 = vec.get(eqs, i1);
+  let r2 = vec.get(eqs, i2);
+  vec.set(vec.set(eqs, i1, r2), i2, r1)
+end;
 
-//machines {};
-print minimum_presses option.unwrap machines {};
+let print_eqs = fun eqs ->
+  eqs |> vec.iter |> (iter.for_each (fun {b;row} -> (print row, b; 0)));
+
+let snd_nonzero = fun (_, x) -> x != 0;
+
+// Gaussian elimination
+let gauss = fun eq_system ->
+  let m = vec.length eq_system in
+  let n = vec.length (vec.get(eq_system, 0)).row in
+  let vars = {mut h=0; mut k=0; mut eqs = eq_system} in
+    loop begin
+      let h = vars.h;
+      let k = vars.k;
+      let eqs = vars.eqs;
+      if h >= m || k >= n then
+        `Break eqs
+      else begin
+        // fail if a column is fully 0!
+        let i_max = int.argmin (iter.filter snd_nonzero) (iter.filter (fun (i, _) -> i>=h)) iter.enumerate (iter.map int.abs) col_iter(eqs, k);
+        vars.eqs <- eq_swap_rows(eqs, h, i_max);
+        iter.range(h+1, m) |> (iter.for_each (fun i -> begin
+          // todo: lcm or gcm for smaller factors
+          let f1 = eq_mat_get(vars.eqs, i, k);
+          let f2 = eq_mat_get(vars.eqs, h, k);
+          vars.eqs <- eq_mat_set(vars.eqs, i, k, 0);
+          let b = eq_b_get(vars.eqs, i) * f2 - eq_b_get(vars.eqs, h) * f1;
+          vars.eqs <- eq_b_set(vars.eqs, i, b);
+          iter.range(k+1, n) |> (iter.for_each (fun j -> begin 
+            let x = eq_mat_get(vars.eqs, i, j) * f2 - eq_mat_get(vars.eqs, h, j) * f1;
+            vars.eqs <- eq_mat_set(vars.eqs, i, j, x)
+          end))
+        end));
+        vars.h <- h + 1;
+        vars.k <- k + 1;
+        `Continue {}
+      end
+    end;
+
+let solve = fun eq_system -> begin
+  let eq_system = gauss eq_system;
+  print_eqs eq_system;
+  //let eq_system = 
+  eq_system
+end;
+
+let result = 0;
+
+//print machines {};
+print solve eq_system option.unwrap machines {};
 //print solve option.unwrap machines {};
 
 
