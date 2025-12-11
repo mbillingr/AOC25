@@ -97,8 +97,11 @@ let eq_swap_rows = fun(eqs, i1, i2) -> begin
   vec.set(vec.set(eqs, i1, r2), i2, r1)
 end;
 
-let print_eqs = fun eqs ->
+let print_eqs = fun eqs -> begin
   eqs |> vec.iter |> (iter.for_each (fun {b;row} -> (print row, b; 0)));
+  io.write_line "=================================================";
+  {}
+end;
 
 let snd_nonzero = fun (_, x) -> x != 0;
 
@@ -114,35 +117,69 @@ let gauss = fun eq_system ->
       if h >= m || k >= n then
         `Break eqs
       else begin
-        // fail if a column is fully 0!
         let i_max = int.argmin (iter.filter snd_nonzero) (iter.filter (fun (i, _) -> i>=h)) iter.enumerate (iter.map int.abs) col_iter(eqs, k);
-        vars.eqs <- eq_swap_rows(eqs, h, i_max);
-        iter.range(h+1, m) |> (iter.for_each (fun i -> begin
-          // todo: lcm or gcm for smaller factors
-          let f1 = eq_mat_get(vars.eqs, i, k);
-          let f2 = eq_mat_get(vars.eqs, h, k);
-          vars.eqs <- eq_mat_set(vars.eqs, i, k, 0);
-          let b = eq_b_get(vars.eqs, i) * f2 - eq_b_get(vars.eqs, h) * f1;
-          vars.eqs <- eq_b_set(vars.eqs, i, b);
-          iter.range(k+1, n) |> (iter.for_each (fun j -> begin 
-            let x = eq_mat_get(vars.eqs, i, j) * f2 - eq_mat_get(vars.eqs, h, j) * f1;
-            vars.eqs <- eq_mat_set(vars.eqs, i, j, x)
-          end))
-        end));
-        vars.h <- h + 1;
-        vars.k <- k + 1;
-        `Continue {}
+        if i_max < 0 then
+          vars.k <- k + 1;
+          `Continue {}
+        else begin          
+          vars.eqs <- eq_swap_rows(eqs, h, i_max);
+          iter.range(h+1, m) |> (iter.for_each (fun i -> begin
+            // todo: lcm or gcm for smaller factors
+            let f1 = eq_mat_get(vars.eqs, i, k);
+            let f2 = eq_mat_get(vars.eqs, h, k);
+            vars.eqs <- eq_mat_set(vars.eqs, i, k, 0);
+            let b = eq_b_get(vars.eqs, i) * f2 - eq_b_get(vars.eqs, h) * f1;
+            vars.eqs <- eq_b_set(vars.eqs, i, b);
+            iter.range(k+1, n) |> (iter.for_each (fun j -> begin 
+              let x = eq_mat_get(vars.eqs, i, j) * f2 - eq_mat_get(vars.eqs, h, j) * f1;
+              vars.eqs <- eq_mat_set(vars.eqs, i, j, x)
+            end))
+          end));
+          vars.h <- h + 1;
+          vars.k <- k + 1;
+          `Continue {}
+        end
       end
     end;
 
+let rec solutions = fun(eq_system, n, vars) -> 
+  if n < 0 then fun _ -> `None {} else begin
+
+  let {b;row} = match vec.peek(eq_system, n) with
+    | `Some eq -> eq
+    | `None _ -> {b=0; row=#[]};
+
+  let d = iter.zip(vec.iter_rev row, vec.iter_rev vars)
+  |> (iter.map int.mul)
+  |> int.sum;
+  let b_ = b - d;
+
+  print row, vars, n, b_;
+
+  match vec.peek(row, n) with
+    | `Some x -> (if b_ % x != 0 || b_ / x < 0 then 
+          fun _ -> `None {}
+        else 
+          solutions(eq_system, n - 1, vec.push_front(vars, b_ / x)))
+    | `None _ -> 
+        iter.range(0, 10)
+        |> (iter.map(fun i -> solutions(eq_system, n - 1, vec.push_front(vars, i)))) 
+        |> iter.flatten
+end;
+
 let solve = fun eq_system -> begin
-  let eq_system = gauss eq_system;
   print_eqs eq_system;
-  //let eq_system = 
-  eq_system
+  let eq_system = gauss eq_system;
+  print_eqs eq_system;  
+
+  let n = (vec.get(eq_system, 0)).row |> vec.length - 1;
+
+  (solutions(eq_system, n, #[])) {}  
 end;
 
 let result = 0;
+
+//let machines = machines |> (iter.map (fun {buttons; joltages} -> {buttons=vec.sort_by_key((fun btn -> vec.length btn), buttons); joltages}));
 
 //print machines {};
 print solve eq_system option.unwrap machines {};
