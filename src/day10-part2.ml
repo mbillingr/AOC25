@@ -36,7 +36,6 @@ let parse_joltages = parsing.delimited(
   parsing.seplist(parsing.char(","), parsing.num, 1),
   parsing.char "}");
 
-//let machine_parser = parsing.sequence(parse_lights, parsing.sequence(parse_buttons, parse_joltages)));
 let machine_parser = 
   parsing.sequence(
     parse_lights,
@@ -47,6 +46,9 @@ let machine_parser = parsing.map_result(
   machine_parser);
 
 let machines = io.lines |> (iter.map(fun line -> option.unwrap parsing.parse(line, machine_parser)));
+
+let nonzero = fun x -> x != 0;
+let snd_nonzero = fun (_, x) -> x != 0;
 
 let zeros = fun(n_rows, n_cols) ->
   let row = vec.collect iter.repeat(0, n_cols) in
@@ -91,10 +93,12 @@ let eq_mat_set = fun(eqs, i, j, x) -> begin
   vec.set(eqs, i, {b;row})
 end;
 
-let eq_swap_rows = fun(eqs, i1, i2) -> begin
-  let r1 = vec.get(eqs, i1);
-  let r2 = vec.get(eqs, i2);
-  vec.set(vec.set(eqs, i1, r2), i2, r1)
+let eq_swap_rows = vec.swap;
+
+let eq_swap_cols = fun(eqs, i1, i2) -> begin
+  vec.iter eqs
+  |> (iter.map(fun {b; row} -> {b; row=vec.swap(row, i1, i2)}))
+  |> vec.collect
 end;
 
 let print_eqs = fun eqs -> begin
@@ -103,7 +107,30 @@ let print_eqs = fun eqs -> begin
   {}
 end;
 
-let snd_nonzero = fun (_, x) -> x != 0;
+// swap columns so that the diagonal is in the left block if the system is underspecified
+let make_left_diag = fun (eqs, limits) -> begin
+  let n = (vec.get(eqs, 0)).row |> vec.length;
+  let m = vec.length eqs;
+  let vars = {mut i=0; mut eqs; mut limits};
+  loop begin
+    let i = vars.i;
+    let eqs = vars.eqs;
+    let limits = vars.limits;
+    if i == m then
+      `Break (eqs, limits)
+    else begin
+      let x = eq_mat_get(eqs, i, i);
+      if x != 0 then
+        `Continue (vars.i <- i + 1)
+      else begin
+        let j = option.unwrap (iter.range(i, n) |> (iter.filter(fun j -> eq_mat_get(eqs, i, j) != 0))) {};
+        vars.eqs <- eq_swap_cols(eqs, i, j);
+        vars.limits <- vec.swap(limits, i, j);
+        `Continue (vars.i <- i + 1)
+      end
+    end
+  end  
+end;
 
 // Gaussian elimination
 let gauss = fun eq_system ->
@@ -142,8 +169,8 @@ let gauss = fun eq_system ->
       end
     end;
 
-let rec solutions = fun(eq_system, n, vars) -> 
-  if n < 0 then fun _ -> `None {} else begin
+let rec solution = fun(eq_system, n, vars) -> 
+  if n < 0 then `Some vars else begin
 
   let {b;row} = match vec.peek(eq_system, n) with
     | `Some eq -> eq
@@ -154,36 +181,106 @@ let rec solutions = fun(eq_system, n, vars) ->
   |> int.sum;
   let b_ = b - d;
 
-  print row, vars, n, b_;
-
   match vec.peek(row, n) with
     | `Some x -> (if b_ % x != 0 || b_ / x < 0 then 
-          fun _ -> `None {}
+          `None {}
         else 
-          solutions(eq_system, n - 1, vec.push_front(vars, b_ / x)))
+          solution(eq_system, n - 1, vec.push_front(vars, b_ / x)))
     | `None _ -> 
-        iter.range(0, 10)
-        |> (iter.map(fun i -> solutions(eq_system, n - 1, vec.push_front(vars, i)))) 
-        |> iter.flatten
+        panic "UNDERDETERMINED"
 end;
 
-let solve = fun eq_system -> begin
-  print_eqs eq_system;
-  let eq_system = gauss eq_system;
-  print_eqs eq_system;  
+let bfs_queue = fun (type a) (x: a): {pop: (any -> [`Some a | `None any]); push: (a -> any); extend: ((any -> [`Some a | `None any]) -> any)} ->
+  let state = {mut data = #[x]} in {
+    pop = fun _ -> (let x = vec.peek_front state.data; state.data <- vec.pop_front state.data; x);
+    push = fun x -> state.data <- vec.push_back(state.data, x);
+    extend = fun it -> state.data <- ((iter.fold(vec.push_back[a=a])) state.data) it
+  };
 
-  let n = (vec.get(eq_system, 0)).row |> vec.length - 1;
+let vec_inc = fun (xs, i) -> vec.set(xs, i, 1 + vec.get(xs, i));
+let not = fun f -> fun x -> if f x then false else true;
 
-  (solutions(eq_system, n, #[])) {}  
+let dbg = fun x -> (print x; x);
+let dbg2 = fun x -> (print x; x);
+
+let incvecs = fun (start, maximum) ->
+  let n = vec.length start in
+  let seen = set.obj set.empty in
+    let queue = bfs_queue start in
+      fun _ -> loop begin
+        match queue.pop {} with
+          | `None _ -> `Break `None {}
+          | `Some x -> (
+            if seen.contains x then
+              `Continue {}
+            else if (iter.any (fun (val, max) -> val > max)) (iter.zip(vec.iter_rev x, vec.iter_rev maximum))  then
+              `Continue {}
+            else begin
+              seen.insert x;
+              queue.extend (iter.map (fun i -> vec_inc(x, i))) iter.range(0,n);
+              `Break `Some x
+            end)
+      end;
+
+let mingz = fun(a, b) ->
+  if a == 0 then b
+  else if b == 0 then a
+  else int.min(a, b);
+
+let get_limits = fun (eqs) ->
+  let row_limits = eqs |> vec.iter |> (iter.map(fun {b;row} -> vec.map((fun x->x*b), row))) in
+    let fst = option.unwrap row_limits {} in
+      ((iter.fold(fun (a,b)->vec.elementwise(mingz,a,b)) ) fst) row_limits;
+
+let dot = fun(xs: vec@int, ys: vec@int): int ->
+  int.sum vec.iter vec.elementwise(int.mul, xs, ys);
+
+
+let solve = fun (nr, eq_system0) -> begin
+  let n = (vec.get(eq_system0, 0)).row |> vec.length;
+  
+  //print_eqs eq_system0;
+  let limits = get_limits eq_system0;
+  let eq_system = gauss eq_system0;
+  let eq_system = vec.filter((fun {row} -> row |> vec.iter |> (iter.any nonzero)), eq_system);
+  let eq_system = vec.map(
+    (fun {b; row} -> 
+      let d = ((iter.fold int.gcd) b) vec.iter row
+      in {b=b/d; row=vec.map((fun x -> x/d), row)}), 
+    eq_system);
+  //print_eqs eq_system;  
+  let (eq_system, limits) = make_left_diag(eq_system, limits);
+  //print_eqs eq_system;  
+  //print "LIMITS:", limits;
+
+  let m = vec.length eq_system;
+
+  let max_total = eq_system0 |> vec.iter |> (iter.map (fun {b} -> b)) |> int.sum;
+  //print nr, m, n, max_total;
+
+  let search_space = incvecs(vec.collect iter.repeat(0, n - m), limits);
+
+  
+  let solution = search_space
+  |> (iter.map (fun vars -> solution(eq_system, m - 1, vars)))
+  |> iter.filter_good
+  |> (iter.map vec.iter[a=int])
+  |> (iter.map int.sum)
+  |> ((iter.fold int.min) max_total);
+  //|> (iter.map (fun xs -> (int.sum vec.iter xs, xs)))
+  //|> ((iter.fold (fun ((x, xs), (y, ys)) -> if y < x then (y, ys) else (x, xs))) (max_total * 2, #[]));
+
+  solution
 end;
 
 let result = 0;
 
-//let machines = machines |> (iter.map (fun {buttons; joltages} -> {buttons=vec.sort_by_key((fun btn -> vec.length btn), buttons); joltages}));
+let machines = machines |> vec.collect |> vec.iter_pbar;
+let eqsystems = machines |> (iter.map eq_system) |> iter.enumerate;
+let eqsystems = eqsystems;
+let solutions = eqsystems |> (iter.map solve);
+let result = int.sum solutions;
 
-//print machines {};
-print solve eq_system option.unwrap machines {};
-//print solve option.unwrap machines {};
+io.write_line ("Day 10, Part 2: " ^ int.to_str(result));
 
-
-io.write_line ("Day 10, Part 1: " ^ int.to_str(result));
+if result <= 14843 then panic "TOO LOW" else {};

@@ -165,3 +165,5 @@ end;
 let result = ((iter.fold int.max) 0) pairwise_areas pids;
 
 io.write_line ("Day 9, Part 2: " ^ int.to_str(result));
+
+if result <= 14843 then panic "TOO LOW" else {};
