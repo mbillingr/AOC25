@@ -9,9 +9,7 @@ import "libs/str.ml";
 import "libs/option.ml";
 import "libs/vec.ml";
 import "libs/parsing.ml";
-import "libs/pbar.ml";   
-
-import "libs/dancing_links.ml";
+import "libs/pbar.ml";
 
 
 let parse_present = 
@@ -25,7 +23,7 @@ let parse_region = parsing.sequence(
   parsing.sequence(
     parsing.suffixed(parsing.num, parsing.char "x"), 
     parsing.suffixed(parsing.num, parsing.text ": ")),
-  parsing.repeat(parsing.suffixed(parsing.num, parsing.ws), 6, 6));
+  parsing.repeat(parsing.suffixed(parsing.num, parsing.opt(parsing.ws)), 6, 6));
 let parse_regions = parsing.repeat_min(parse_region, 1);
 
 let parse_data = parsing.sequence(parse_presents, parse_regions);
@@ -34,109 +32,57 @@ let input = str.join(" ", io.lines);
 
 let (shapes, regions) = option.unwrap parsing.parse(input, parse_data);
 
-
-// turn a shape into a function returning the covered grid coordinates
-let compile_shape = fun shape ->
-  vec.iter shape
-  |> iter.enumerate
-  |> (iter.map (fun (i, row) -> 
-      vec.iter row
-      |> iter.enumerate
-      |> (iter.map (fun (j, ch) -> (i, j, ch)))))
-  |> iter.flatten
-  |> (iter.filter (fun (_, _, ch) -> ch == "#"))
-  |> ((iter.fold 
-          (fun (f, (i, j)) -> (fun (r, c) -> vec.push_back(f(r,c), (i+r, j+c)))))
-        (fun (r, c) -> #[]));
+let shape_sizes = vec.map((fun s -> int.sum (iter.map (fun ch -> (option.unwrap dict.get(#{"#": 1, ".": 0}, ch)))) iter.flatten (iter.map vec.iter[a=str]) vec.iter s), shapes);
 
 
-let flip = fun shape -> vec.reverse shape;
+// Test if all presents fit in the region in a trivial 3x3 grid arrangement
+let obviously_possible = fun ((width, height), counts) ->
+  (width / 3) * (height / 3) >= int.sum vec.iter counts;
 
-let rot = fun shape ->
-  iter.range(0, 3) 
-  |> (iter.map (fun i -> 
-    iter.range(0, 3)
-    |> (iter.map (fun j ->
-      vec.get(vec.get(shape, 2 - j), i)))
-    |> vec.collect)) 
-  |> vec.collect;
+let area = fun ((width, height), _) -> width * height;
 
+let coverage = fun ((width, height), counts) ->
+  int.sum vec.iter vec.elementwise(int.mul, counts, shape_sizes);
 
-// all possible variations of rotating and flipping a shape
-let shape_variations = fun shape -> begin
-  let a = shape;
-  let b = rot a;
-  let c = rot b;
-  let d = rot c;
-  let e = flip a;
-  let f = flip b;
-  let g = flip c;
-  let h = flip d;
-  #[a, b, c, d, e, f, g, h] |> vec.iter |> set.collect
-end;
+let totals = {mut obviously=0; mut maybe=0; mut certainly_not=0; total=vec.length regions};
+regions |> vec.iter |> (iter.for_each (fun region -> begin
+  let obvpo = if obviously_possible region then 
+    totals.obviously <- totals.obviously + 1;
+    "obviously" 
+  else 
+    "maybe    ";
 
-print vec.front regions;
+  let covered = coverage region;
+  let avail = area region;
+  let percentage = (100 * covered) / avail;  
 
-let shape_instance_name = fun (shape_nr, instance_nr) -> 
-  "S" ^ int.to_str(shape_nr) ^ "-" ^ int.to_str(instance_nr);
+  if covered >= avail then
+    totals.certainly_not <- totals.certainly_not + 1;
+    {}
+  else {};
 
-let region_position_name = fun (row, col) ->
-  "R" ^ int.to_str(row) ^ "/" ^ int.to_str(col);
+  io.write_str obvpo;
+  io.write_str "    ";
+  if percentage < 100 then io.write_str " " else {};
+  if percentage < 10 then io.write_str " " else {};
+  io.write_str int.to_str percentage;
+  io.write_str "% = ";
+  io.write_str int.to_str covered;
+  io.write_str "/";
+  io.write_str int.to_str avail;
+  io.write_str "    ";
+  print region;
+  {}
+end));
 
-let check_region = fun ((width, height), counts) -> begin
-  let h = dancing_links.new_problem{};
+totals.maybe <- totals.total - totals.obviously - totals.certainly_not;
 
-  let vars = {mut columns = dict.empty};
+print totals;
 
-  // add one "required" column for each shape instance
-  counts |> vec.iter |> iter.enumerate |> (iter.for_each (fun (c, n) ->
-    iter.range(0, n) |> (iter.for_each (fun k -> 
-      let name = shape_instance_name(c, k) in
-      let col = dancing_links.exactly_once_column(h, name) in
-        vars.columns <- dict.insert(vars.columns, name, col)))));
-
-  // add one "optional" column for each position in the region
-  iter.range(0, height) |> (iter.for_each (fun i ->
-    iter.range(0, width) |> (iter.for_each (fun j ->
-      let name = region_position_name(i, j) in
-      let col = dancing_links.atmost_once_column(h, name) in
-        vars.columns<- dict.insert(vars.columns, name, col)))));
-
-  // add one row for each shape placement
-  shapes 
-  |> vec.iter 
-  |> iter.enumerate 
-  |> (iter.for_each (fun (c, shp) ->
-    shape_variations shp 
-    |> set.iter 
-    |> (iter.map compile_shape) 
-    |> (iter.for_each (fun shp -> 
-      iter.range(0, height - 2)
-      |> (iter.for_each (fun row -> 
-        iter.range(0, width - 2)
-        |> (iter.for_each (fun col ->
-          iter.range(0, vec.get(counts, c))
-          |> (iter.for_each (fun k ->
-            let names = vec.push_front(
-                vec.map(region_position_name, shp(row, col)),
-                shape_instance_name(c, k))
-            in let row = vec.map((fun name -> option.unwrap dict.get(vars.columns, name)), names)
-            in dancing_links.add_row(h, row)))))))))));
-  
-  //  let row = #[region_position_name(i, j)]
-  //let row = vec.push_back(shape_instance_name(c, k))
-  //dancing_links.add_row(h, row);
-
-  dancing_links.print_matrix h;
-  print h.rows, "rows";
-
-  0
-end;
-
-print check_region(vec.front regions);
-
-
-let result = 0;
+// Apparently, they either fit trivially or clearly not...
+let result = totals.obviously;  
 
 
 io.write_line ("Day 12, Part 1: " ^ int.to_str(result));
+
+if result <= 530 then panic "TOO LOW" else {};
